@@ -20,16 +20,54 @@ router.post('/signup', (req, res, next) => {
   } else {
     sql.connect(config)
     .then(db => {
-      var hash = getHash(req.body.password)
-      return db.request()
-        .query`INSERT INTO USERS VALUES (${req.body.username}, ${hash}, ${req.body.initial_amount}`
+      const transaction = new sql.Transaction()
+      transaction.begin(4, err => {
+        if (err)
+          next(err)
+        else {
+          db.request()
+            .input('username', req.body.username)
+            .query('SELECT * FROM USERS WHERE username = @username',
+            (err, result) => {
+              if (err)
+                next(err)
+              else if (result.recordset.length > 0) {
+                transaction.rollback(err => {
+                  if (err)
+                    next(err)
+                  else {
+                    err = new Error(`Fail to create user ${req.body.username}`)
+                    err.status = 403
+                    next(err)
+                  }
+                })
+              } else {
+                var hash = getHash(req.body.password)
+                db.request()
+                  .input('username', req.body.username)
+                  .input('hash', hash)
+                  .input('initial_amount', req.body.initial_amount)
+                  .query('INSERT INTO USERS VALUES (@username, @hash, @initial_amount)',
+                    (err, result) => {
+                      if (err)
+                        next(err)
+                      else {
+                        transaction.commit(err => {
+                          if (err)
+                            next(err)
+                          else {
+                            res.status(200)
+                            res.setHeader('Content-Type', 'text/html')
+                            res.send('Created user ' + req.body.username)
+                          }
+                        })
+                      }
+                    })
+              }
+            })
+        }
+      })
     })
-    .then(result => {
-      res.status(200)
-      res.setHeader('Content-Type', 'text/html')
-      res.send('Created user ' + req.body.username)
-    })
-    .catch(err => next(err))
   }
 })
 
@@ -40,7 +78,7 @@ router.get('/login', (req, res, next) => {
       .query`SELECT * FROM USERS WHERE username = ${req.body.username}`
   })
   .then(result => {
-    if (result.length == 0) {
+    if (result.recordset.length == 0) {
       err = new Error('Invalid username or password')
       err.status = 403
       next(err)
@@ -48,7 +86,7 @@ router.get('/login', (req, res, next) => {
       var hash = getHash(req.body.password)
       //console.log(hash)
       //console.log(result.recordsets[0][0].hash)
-      if (hash == result.recordsets[0][0].hash) {
+      if (hash == result.recordset[0].hash) {
         res.status(200)
         res.setHeader('Content-Type', 'text/html')
         var jwt = getToken(result)
