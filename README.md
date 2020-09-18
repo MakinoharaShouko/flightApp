@@ -19,3 +19,16 @@ Use the following json format
   "dest": String
 }
 ```
+
+## Reservation
+
+### Book
+Since this is a server application, it would be impossible to keep track of itineraries from the last search,
+considering that many users may do the search concurrently. Thus, to book a reservation, send `post` request
+to `/reservations` in the following json format
+```
+{
+  "flight1": Number,
+  "flight2": Number
+}
+```
