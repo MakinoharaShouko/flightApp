@@ -242,16 +242,39 @@ makeReservation = (db, transaction, flights, username, callback) => {
 }
 
 router.route('/')
-.post(verifyUser, (req, res, next) => {
+.all((req, res, next) => {
+    sql.connect(config)
+    .then(db => {
+        req.db = db
+        next()
+    })
+    .catch(err => next(err))
+})
+.get(verifyUser, (req, res, next) => {  // get a list of reservations
+    if (req.db) {
+        req.db.request()
+            .query`SELECT * FROM RESERVATIONS WHERE username = ${req.user.username} AND canceled = 0`
+            .then(result => {
+                res.status(200)
+                res.setHeader('Content-Type', 'application/json')
+                res.json(result.recordset)
+            })
+            .catch(err => next(err))
+    } else {
+        err = new Error('Failed to get reservations')
+        err.status = 500
+        next(err)
+    }
+})
+.post(verifyUser, (req, res, next) => {  // book
     if (!req.body.hasOwnProperty('flight1')) {
         err = new Error(`No flight information provided`)
         err.status = 403
         next(err)
     }
-    sql.connect(config)
-    .then(db => {
+    if (req.db) {
         const transaction = new sql.Transaction()
-        makeReservation(db, transaction, req.body, req.user.username,
+        makeReservation(req.db, transaction, req.body, req.user.username,
             (err, rid) => {
                 if (err)
                     next(err)
@@ -261,8 +284,11 @@ router.route('/')
                     res.send('Booked flight(s), reservation ID ' + rid)
                 }
             })
-    })
-    .catch(err => next(err))
+    } else {
+        err = new Error('Failed to make the reservation')
+        err.status = 500
+        next(err)
+    }
 })
 
 module.exports = router
