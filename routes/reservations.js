@@ -58,6 +58,13 @@ markReservationPaid = (db, rid, callback) => {
         (err, result) => callback(err, result))
 }
 
+markReservationCanceled = (db, rid, callback) => {
+    db.request()
+        .input('rid', rid)
+        .query('UPDATE RESERVATIONS SET canceled = 1 WHERE rid = @rid',
+        (err, result) => callback(err, result))
+}
+
 makeReservation = (db, transaction, flights, username, callback) => {
     transaction.begin(4, err => {
         if (err)  // try to restart transaction
@@ -151,13 +158,13 @@ makeReservation = (db, transaction, flights, username, callback) => {
                                                     } else {
                                                         if (result.recordset[0].capacity > result.recordset[0].seat_taken) {
                                                             var seat2 = result.recordset[0].seat_taken
-                                                            takeSeat(db, f1, seat1, (err, result) => {
+                                                            takeSeat(db, f1, seat1 + 1, (err, result) => {
                                                                 if (err) {
                                                                     transaction.rollback()
                                                                     .then(result => callback(err, null))
                                                                     .catch(err => callback(err, null))
                                                                 } else {
-                                                                    takeSeat(db, f2, seat2, (err, result) => {
+                                                                    takeSeat(db, f2, seat2 + 1, (err, result) => {
                                                                         if (err) {
                                                                             transaction.rollback()
                                                                             .then(result => callback(err, null))
@@ -209,7 +216,7 @@ makeReservation = (db, transaction, flights, username, callback) => {
                                             }
                                         })
                                     } else {
-                                        takeSeat(db, f1, seat1, (err, result) => {
+                                        takeSeat(db, f1, seat1 + 1, (err, result) => {
                                             if (err) {
                                                 transaction.rollback()
                                                 .then(result => callback(err, null))
@@ -272,7 +279,7 @@ makeReservation = (db, transaction, flights, username, callback) => {
 }
 
 payReservation = (db, transaction, username, rid, callback) => {
-    transaction.begin(4, (err, result) => {
+    transaction.begin(4, err => {
         if (err)
             payReservation(db, transaction, username, rid, callback)
         else {
@@ -306,14 +313,14 @@ payReservation = (db, transaction, username, rid, callback) => {
                                 getUserAmount(db, username, (err, result) => {
                                     if (err) {
                                         transaction.rollback()
-                                        .then(result => callback(err, result))
+                                        .then(result => callback(err, null))
                                         .catch(err => callback(err, null))
                                     } else {
                                         var balance = result.recordset[0].balance
                                         getFlightInfo(db, f1, (err, result) => {
                                             if (err) {
                                                 transaction.rollback()
-                                                .then(result => callback(err, result))
+                                                .then(result => callback(err, null))
                                                 .catch(err => callback(err, null))
                                             } else {
                                                 price += result.recordset[0].price
@@ -321,7 +328,7 @@ payReservation = (db, transaction, username, rid, callback) => {
                                                     getFlightInfo(db, f2, (err, result) => {
                                                         if (err) {
                                                             transaction.rollback()
-                                                            .then(result => callback(err, result))
+                                                            .then(result => callback(err, null))
                                                             .catch(err => callback(err, null))
                                                         } else {
                                                             price += result.recordset[0].price
@@ -337,13 +344,13 @@ payReservation = (db, transaction, username, rid, callback) => {
                                                                 updateUserAmount(db, username, balance - price, (err, result) => {
                                                                     if (err) {
                                                                         transaction.rollback()
-                                                                        .then(result => callback(err, result))
+                                                                        .then(result => callback(err, null))
                                                                         .catch(err => callback(err, null))
                                                                     } else {
                                                                         markReservationPaid(db, rid, (err, reuslt) => {
                                                                             if (err) {
                                                                                 transaction.rollback()
-                                                                                .then(result => callback(err, result))
+                                                                                .then(result => callback(err, null))
                                                                                 .catch(err => callback(err, null))
                                                                             } else {
                                                                                 transaction.commit(err => {
@@ -372,13 +379,13 @@ payReservation = (db, transaction, username, rid, callback) => {
                                                         updateUserAmount(db, username, balance - price, (err, result) => {
                                                             if (err) {
                                                                 transaction.rollback()
-                                                                .then(result => callback(err, result))
+                                                                .then(result => callback(err, null))
                                                                 .catch(err => callback(err, null))
                                                             } else {
                                                                 markReservationPaid(db, rid, (err, reuslt) => {
                                                                     if (err) {
                                                                         transaction.rollback()
-                                                                        .then(result => callback(err, result))
+                                                                        .then(result => callback(err, null))
                                                                         .catch(err => callback(err, null))
                                                                     } else {
                                                                         transaction.commit(err => {
@@ -403,6 +410,169 @@ payReservation = (db, transaction, username, rid, callback) => {
                 })
         }
     })
+}
+
+cancelReservation = (db, transaction, username, rid, callback) => {
+    transaction.begin(4)
+    .then(result => {
+        findReservation(db, rid, username, (err, result) => {
+            if (err) {
+                transaction.rollback()
+                .then(result => callback(err, null))
+                .catch(err => callback(err, null))
+            } else {
+                if (result.recordset.length == 0) {
+                    transaction.rollback()
+                    .then(result => {
+                        err = new Error(`Cannot find your reservation ${rid}`)
+                            err.status = 404
+                            callback(err, null)
+                    })
+                    .catch(err => callback(err, null))
+                } else {
+                    if (result.recordset[0].canceled == 1) {
+                        transaction.rollback()
+                        .then(result => {
+                            err = new Error('You have already canceled this reservation')
+                            err.status = 403
+                            callback(err, null)
+                        })
+                        .catch(err => callback(err, null))
+                    } else {
+                        var f1 = result.recordset[0].fid_1
+                        var f2 = result.recordset[0].fid_2
+                        var paid = result.recordset[0].paid
+                        markReservationCanceled(db, rid, (err, result) => {
+                            if (err) {
+                                transaction.rollback()
+                                .then(result => callback(err, null))
+                                .catch(err => callback(err, null))
+                            } else {
+                                var price = 0
+                                if (f2 != -1) {
+                                    getFlightInfo(db, f1, (err, result) => {
+                                        if (err) {
+                                            transaction.rollback()
+                                            .then(result => callback(err, null))
+                                            .catch(err => callback(err, null))
+                                        } else {
+                                            price += result.recordset[0].price
+                                            takeSeat(db, f1, result.recordset[0].seat_taken - 1, (err, result) => {
+                                                if (err) {
+                                                    transaction.rollback()
+                                                    .then(result => callback(err, null))
+                                                    .catch(err => callback(err, null))
+                                                } else {
+                                                    getFlightInfo(db, f2, (err, result) => {
+                                                        if (err) {
+                                                            transaction.rollback()
+                                                            .then(result => callback(err, null))
+                                                            .catch(err => callback(err, null))
+                                                        } else {
+                                                            price += result.recordset[0].price
+                                                            takeSeat(db, f2, result.recordset[0].seat_taken - 1, (err, result) => {
+                                                                if (err) {
+                                                                    transaction.rollback()
+                                                                    .then(result => callback(err, null))
+                                                                    .catch(err => callback(err, null))
+                                                                } else {
+                                                                    if (paid == 1) {  // refund
+                                                                        getUserAmount(db, username, (err, result) => {
+                                                                            if (err) {
+                                                                                transaction.rollback()
+                                                                                .then(result => callback(err, null))
+                                                                                .catch(err => callback(err, null))
+                                                                            } else {
+                                                                                updateUserAmount(db, username, result.recordset[0].balance + price, (err, result) => {
+                                                                                    if (err) {
+                                                                                        transaction.rollback()
+                                                                                        .then(result => callback(err, null))
+                                                                                        .catch(err => callback(err, null))
+                                                                                    } else {
+                                                                                        transaction.commit(err => {
+                                                                                            if (err)
+                                                                                                cancelReservation(db, transaction, username, rid, callback)
+                                                                                            else
+                                                                                                callback(null, result)
+                                                                                        })
+                                                                                    }
+                                                                                })
+                                                                            }
+                                                                        })
+                                                                    } else {
+                                                                        transaction.commit(err => {
+                                                                            if (err)
+                                                                                cancelReservation(db, transaction, username, rid, callback)
+                                                                            else
+                                                                                callback(null, result)
+                                                                        })
+                                                                    }
+                                                                }
+                                                            })
+                                                        }
+                                                    })
+                                                }
+                                            })
+                                        }
+                                    })
+                                } else {
+                                    getFlightInfo(db, f1, (err, result) => {
+                                        if (err) {
+                                            transaction.rollback()
+                                            .then(result => callback(err, null))
+                                            .catch(err => callback(err, null))
+                                        } else {
+                                            price += result.recordset[0].price
+                                            takeSeat(db, f1, result.recordset[0].seat_taken - 1, (err, result) => {
+                                                if (err) {
+                                                    transaction.rollback()
+                                                    .then(result => callback(err, null))
+                                                    .catch(err => callback(err, null))
+                                                } else {
+                                                    if (paid == 1) {
+                                                        getUserAmount(db, username, (err, result) => {
+                                                            if (err) {
+                                                                transaction.rollback()
+                                                                .then(result => callback(err, null))
+                                                                .catch(err => callback(err, null))
+                                                            } else {
+                                                                updateUserAmount(db, username, result.recordset[0].balance + price, (err, result) => {
+                                                                    if (err) {
+                                                                        transaction.rollback()
+                                                                        .then(result => callback(err, null))
+                                                                        .catch(err => callback(err, null))
+                                                                    } else {
+                                                                        transaction.commit(err => {
+                                                                            if (err)
+                                                                                cancelReservation(db, transaction, username, rid, callback)
+                                                                            else
+                                                                                callback(null, result)
+                                                                        })
+                                                                    }
+                                                                })
+                                                            }
+                                                        })
+                                                    } else {
+                                                        transaction.commit(err => {
+                                                            if (err)
+                                                                cancelReservation(db, transaction, username, rid, callback)
+                                                            else
+                                                                callback(null, result)
+                                                        })
+                                                    }
+                                                }
+                                            })
+                                        }
+                                    })
+                                }
+                            }
+                        })
+                    }
+                }
+            }
+        })
+    })
+    .catch(err => cancelReservation(db, transaction, username, rid, callback))
 }
 
 router.route('/')
@@ -469,6 +639,24 @@ router.put('/:rid/pay', verifyUser, (req, res, next) => {
                     res.send('Paid reservation: ' + req.params.rid + ' remaining balance ' + balance)
                 }
         })
+    })
+    .catch(err => next(err))
+})
+
+router.put('/:rid/cancel', verifyUser, (req, res, next) => {
+    sql.connect(config)
+    .then(db => {
+        const transaction = new sql.Transaction()
+        cancelReservation(db, transaction, req.user.username, req.params.rid,
+            (err, result) => {
+                if (err)
+                    next(err)
+                else {
+                    res.status(200)
+                    res.setHeader('Content-Type', 'text/html')
+                    res.send(`Canceled reservation ${req.params.rid}`)
+                }
+            })
     })
     .catch(err => next(err))
 })
