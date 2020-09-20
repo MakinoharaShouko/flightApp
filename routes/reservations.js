@@ -28,6 +28,36 @@ takeSeat = (db, flight, seat, callback) => {
             (err, result) => callback(err, result))
 }
 
+findReservation = (db, rid, username, callback) => {
+    db.request()
+        .input('rid', rid)
+        .input('username', username)
+        .query('SELECT * FROM RESERVATIONS WHERE rid = @rid AND canceled = 0 AND username = @username',
+        (err, result) => callback(err, result))
+}
+
+getUserAmount = (db, username, callback) => {
+    db.request()
+        .input('username', username)
+        .query('SELECT balance FROM USERS WHERE username = @username',
+        (err, result) => callback(err, result))
+}
+
+updateUserAmount = (db, username, balance, callback) => {
+    db.request()
+        .input('username', username)
+        .input('balance', balance)
+        .query('UPDATE USERS SET balance = @balance WHERE username = @username',
+        (err, result) => callback(err, result))
+}
+
+markReservationPaid = (db, rid, callback) => {
+    db.request()
+        .input('rid', rid)
+        .query('UPDATE RESERVATIONS SET paid = 1 WHERE rid = @rid',
+        (err, result) => callback(err, result))
+}
+
 makeReservation = (db, transaction, flights, username, callback) => {
     transaction.begin(4, err => {
         if (err)  // try to restart transaction
@@ -241,6 +271,140 @@ makeReservation = (db, transaction, flights, username, callback) => {
     })
 }
 
+payReservation = (db, transaction, username, rid, callback) => {
+    transaction.begin(4, (err, result) => {
+        if (err)
+            payReservation(db, transaction, username, rid, callback)
+        else {
+            findReservation(db, rid, username, (err, result) => {
+                    if (err) {
+                        transaction.rollback()
+                        .then(result => callback(err, null))
+                        .catch(err => callback(err, null))
+                    } else {
+                        if (result.recordset.length == 0) {
+                            transaction.rollback()
+                            .then(result => {
+                                err = new Error(`Cannot find your reservation ${rid}`)
+                                err.status = 404
+                                callback(err, null)
+                            })
+                            .catch(err => callback(err, null))
+                        } else {
+                            if (result.recordset[0].paid == 1) {
+                                transaction.rollback()
+                                .then(result => {
+                                    err = new Error('You have already paid!')
+                                    err.status = 403
+                                    callback(err, null)
+                                })
+                                .catch(err => next(err, null)) 
+                            } else {
+                                var f1 = result.recordset[0].fid_1
+                                var f2 = result.recordset[0].fid_2
+                                var price = 0
+                                getUserAmount(db, username, (err, result) => {
+                                    if (err) {
+                                        transaction.rollback()
+                                        .then(result => callback(err, result))
+                                        .catch(err => callback(err, null))
+                                    } else {
+                                        var balance = result.recordset[0].balance
+                                        getFlightInfo(db, f1, (err, result) => {
+                                            if (err) {
+                                                transaction.rollback()
+                                                .then(result => callback(err, result))
+                                                .catch(err => callback(err, null))
+                                            } else {
+                                                price += result.recordset[0].price
+                                                if (f2 != -1) {
+                                                    getFlightInfo(db, f2, (err, result) => {
+                                                        if (err) {
+                                                            transaction.rollback()
+                                                            .then(result => callback(err, result))
+                                                            .catch(err => callback(err, null))
+                                                        } else {
+                                                            price += result.recordset[0].price
+                                                            if (price > balance) {
+                                                                transaction.rollback()
+                                                                .then(result => {
+                                                                    err = new Error(`You only have ${balance} in account but itinerary costs ${price}`)
+                                                                    err.status = 403
+                                                                    callback(err, null)
+                                                                })
+                                                                .catch(err => callback(err, null))
+                                                            } else {
+                                                                updateUserAmount(db, username, balance - price, (err, result) => {
+                                                                    if (err) {
+                                                                        transaction.rollback()
+                                                                        .then(result => callback(err, result))
+                                                                        .catch(err => callback(err, null))
+                                                                    } else {
+                                                                        markReservationPaid(db, rid, (err, reuslt) => {
+                                                                            if (err) {
+                                                                                transaction.rollback()
+                                                                                .then(result => callback(err, result))
+                                                                                .catch(err => callback(err, null))
+                                                                            } else {
+                                                                                transaction.commit(err => {
+                                                                                    if (err)
+                                                                                        payReservation(db, transaction, username, rid, callback)
+                                                                                    else
+                                                                                        callback(null, balance - price)
+                                                                                })
+                                                                            }
+                                                                        })
+                                                                    }
+                                                                })
+                                                            }
+                                                        }
+                                                    })
+                                                } else {
+                                                    if (price > balance) {
+                                                        transaction.rollback()
+                                                        .then(result => {
+                                                            err = new Error(`You only have ${balance} in account but itinerary costs ${price}`)
+                                                            err.status = 403
+                                                            callback(err, null)
+                                                        })
+                                                        .catch(err => callback(err, null))
+                                                    } else {
+                                                        updateUserAmount(db, username, balance - price, (err, result) => {
+                                                            if (err) {
+                                                                transaction.rollback()
+                                                                .then(result => callback(err, result))
+                                                                .catch(err => callback(err, null))
+                                                            } else {
+                                                                markReservationPaid(db, rid, (err, reuslt) => {
+                                                                    if (err) {
+                                                                        transaction.rollback()
+                                                                        .then(result => callback(err, result))
+                                                                        .catch(err => callback(err, null))
+                                                                    } else {
+                                                                        transaction.commit(err => {
+                                                                            if (err)
+                                                                                payReservation(db, transaction, username, rid, callback)
+                                                                            else
+                                                                                callback(null, balance - price)
+                                                                        })
+                                                                    }
+                                                                })
+                                                            }
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        })
+                                    }
+                                })
+                            }
+                        }
+                    }
+                })
+        }
+    })
+}
+
 router.route('/')
 .all((req, res, next) => {
     sql.connect(config)
@@ -289,6 +453,24 @@ router.route('/')
         err.status = 500
         next(err)
     }
+})
+
+router.put('/:rid/pay', verifyUser, (req, res, next) => {
+    sql.connect(config)
+    .then(db => {
+        const transaction = new sql.Transaction()
+        payReservation(db, transaction, req.user.username, req.params.rid,
+            (err, balance) => {
+                if (err)
+                    next(err)
+                else {
+                    res.status(200)
+                    res.setHeader('Content-Type', 'text/html')
+                    res.send('Paid reservation: ' + req.params.rid + ' remaining balance ' + balance)
+                }
+        })
+    })
+    .catch(err => next(err))
 })
 
 module.exports = router

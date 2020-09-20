@@ -40,8 +40,8 @@ userSignUp = (db, transaction, user, callback) => {
             db.request()
               .input('username', user.username)
               .input('hash', hash)
-              .input('initial_amount', user.initial_amount)
-              .query('INSERT INTO USERS VALUES (@username, @hash, @initial_amount)',
+              .input('balance', user.initial_amount)
+              .query('INSERT INTO USERS VALUES (@username, @hash, @balance)',
                 (err, result) => {
                   if (err) {
                     transaction.rollback()
